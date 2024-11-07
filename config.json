@@ -1,11 +1,12 @@
 {
   "brokers": ["localhost:9094"],
-  "tcp_ports": {
-    "7777": "topic1",
-    "7778": "topic2"
-  },
-  "udp_ports": {
-    "8888": "topic3",
-    "8889": "topic4"
-  }
+  "tcp_ports": [
+    { "port": "7777", "topic": "topic1" },
+    { "port": "7778", "topic": "topic2"
+    }
+  ],
+  "udp_ports": [
+    { "port": "8888", "topic": "topic3" },
+    { "port": "8889", "topic": "topic4" }
+  ]
 }

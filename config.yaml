@@ -1,0 +1,21 @@
+brokers:
+  - "localhost:9094"
+processors:
+  tcp:
+    - port: "7777"
+      topic: "topic1"
+      mode: "faster"
+      messageBytesSize: 500 #optimization for memory allocation tuning
+      messagesPerBatch: 378000 #optimization for memory allocation tuning
+    - port: "7778"
+      topic: "topic2"
+      mode: "consistent"
+    - port: "7779"
+      topic: "topic3"
+      mode: "default" # default should delegate to cluster level configuration
+  udp:
+    - port: "8888"
+      topic: "topic4"
+      mode: "faster" # udp ports only should support faster
+    - port: "8889"
+      topic: "topic5"

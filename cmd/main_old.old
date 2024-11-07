@@ -1,0 +1,174 @@
+package main
+
+import (
+	"fmt"
+	"github.com/IBM/sarama"
+	"golang-poc/internal/init"
+	"golang-poc/pkg/env"
+	"log"
+	"net"
+	"strconv"
+	"sync"
+)
+
+var producer sarama.SyncProducer
+var messageChan chan Message
+
+type Message struct {
+	Topic   string
+	Content []byte
+}
+
+func main() {
+	// Load configuration
+	defaultEnvs := map[string]string{
+		"PORTAFKA_CONFIG": "/etc/portafka/config.yaml",
+	}
+	env.Load(defaultEnvs)
+	cfg, err := init.LoadConfig("PORTAFKA_CONFIG")
+	if err != nil {
+		log.Fatalf("Failed to load init: %v", err)
+	}
+
+	// Initialize Kafka producer
+	producer, err = newKafkaProducer(cfg.Brokers)
+	if err != nil {
+		log.Fatalf("Failed to start Kafka producer: %v", err)
+	}
+
+	// Initialize buffered channel
+	messageChan = make(chan Message, 10000)
+
+	// Create a wait group to wait for all goroutines to finish
+	var wg sync.WaitGroup
+
+	// Start TCP listeners for each port
+	for portStr, topic := range cfg.TCPPorts {
+		port, err := strconv.Atoi(portStr)
+		if err != nil {
+			log.Fatalf("Invalid TCP port: %v", portStr)
+		}
+		wg.Add(1)
+		go startTCPListener(port, topic, &wg)
+	}
+
+	// Start UDP listeners for each port
+	for portStr, topic := range cfg.UDPPorts {
+		port, err := strconv.Atoi(portStr)
+		if err != nil {
+			log.Fatalf("Invalid UDP port: %v", portStr)
+		}
+		wg.Add(1)
+		go startUDPListener(port, topic, &wg)
+	}
+
+	// Start a goroutine to process messages from the channel
+	wg.Add(1)
+	go processMessages(&wg)
+
+	// Wait for all goroutines to finish
+	wg.Wait()
+}
+
+//func newKafkaProducer(brokers []string) (sarama.SyncProducer, error) {
+//	kafkaConfig := sarama.NewConfig()
+//	kafkaConfig.Producer.RequiredAcks = sarama.WaitForAll
+//	kafkaConfig.Producer.Retry.Max = 10
+//	//kafkaConfig.producer.Return.Successes = true
+//	kafkaConfig.Producer.Flush.Frequency = 1000 * time.Millisecond
+//	kafkaConfig.Producer.Flush.MaxMessages = 1000
+//	kafkaConfig.Producer.Flush.Bytes = 1048576 // 1MB
+//	kafkaConfig.Producer.Flush.Messages = 1000
+//	producer, err := sarama.NewSyncProducer(brokers, kafkaConfig)
+//	if err != nil {
+//		return nil, fmt.Errorf("failed to create Kafka producer: %w", err)
+//	}
+//	return producer, nil
+//}
+//
+//func startTCPListener(port int, topic string, wg *sync.WaitGroup) {
+//	defer wg.Done()
+//	address := fmt.Sprintf(":%d", port)
+//	listener, err := net.Listen("tcp", address)
+//	if err != nil {
+//		log.Fatalf("Failed to listen on TCP port %d: %v", port, err)
+//	}
+//	defer listener.Close()
+//	log.Printf("Listening on TCP port %d", port)
+//
+//	for {
+//		conn, err := listener.Accept()
+//		if err != nil {
+//			log.Printf("Failed to accept connection on port %d: %v", port, err)
+//			continue
+//		}
+//		go handleTCPConnection(conn, topic)
+//	}
+//}
+//
+//func handleTCPConnection(conn net.Conn, topic string) {
+//	defer conn.Close()
+//	buffer := make([]byte, 1024) // Create a buffer with 1024 bytes
+//	n, err := conn.Read(buffer)  // Read up to 1024 bytes into the buffer
+//	if err != nil {
+//		log.Fatal(err)
+//	}
+//	data := buffer[:n] // Slice the buffer to the actual number of bytes read
+//	messageChan <- Message{Topic: topic, Content: data}
+//	// write ok if consistent mode
+//}
+
+//func handleTCPConnection(conn net.Conn, topic string) {
+//	defer conn.Close()
+//	scanner := bufio.NewScanner(conn)
+//	for scanner.Scan() {
+//		message := scanner.Bytes()
+//		messageChan <- Message{topic: topic, Content: message}
+//	}
+//	if err := scanner.Err(); err != nil {
+//		log.Printf("Error reading from connection: %v", err)
+//	}
+//}
+
+func startUDPListener(port int, topic string, wg *sync.WaitGroup) {
+	defer wg.Done()
+	address := fmt.Sprintf(":%d", port)
+	conn, err := net.ListenPacket("udp", address)
+	if err != nil {
+		log.Fatalf("Failed to listen on UDP port %d: %v", port, err)
+	}
+	defer conn.Close()
+	log.Printf("Listening on UDP port %d", port)
+
+	buffer := make([]byte, 1024)
+	for {
+		n, _, err := conn.ReadFrom(buffer)
+		if err != nil {
+			log.Printf("Error reading from UDP port %d: %v", port, err)
+			continue
+		}
+		message := buffer[:n]
+		messageChan <- Message{Topic: topic, Content: message}
+	}
+}
+
+func processMessages(wg *sync.WaitGroup) {
+	defer wg.Done()
+	for msg := range messageChan {
+		if err := sendToKafka(msg.Topic, msg.Content); err != nil {
+			log.Printf("Failed to send message to Kafka: %v", err)
+			return
+		}
+		log.Default().Printf("Message sent to Kafka topic %s", msg.Topic)
+	}
+
+}
+
+func sendToKafka(topic string, message []byte) error {
+	msg := &sarama.ProducerMessage{
+		Topic: topic,
+		Value: sarama.ByteEncoder(message),
+	}
+	_, _, err := producer.SendMessage(msg)
+	return err
+}

@@ -4,3 +4,4 @@
 !.elasticbeanstalk/*.cfg.yml
 !.elasticbeanstalk/*.global.yml
 main2.go*
+.idea*
